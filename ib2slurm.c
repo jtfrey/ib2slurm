@@ -252,6 +252,9 @@ ib_switch_iterator(
           mad_decode_field(node->info, IB_PORT_LINK_WIDTH_ACTIVE_F, &link_width);
           mad_decode_field(node->info, IB_PORT_LINK_SPEED_ACTIVE_F, &link_speed);
           
+          if ( link_width < 1 ) link_width = 1;
+          if ( link_speed < 1 ) link_speed = 1;
+          
           fprintf(output_file, " LinkSpeed=%d", link_width * link_speed);
         }
 
