@@ -10,7 +10,7 @@ CC		= cc
 CPPFLAGS	= -I/usr/include/infiniband
 CFLAGS		= -Wextra -Wall -Wno-unused-parameter -g -O1
 LDFLAGS		=
-LIBS		= -libnetdisc
+LIBS		= -libnetdisc -losmcomp -libmad
 
 #
 ##
