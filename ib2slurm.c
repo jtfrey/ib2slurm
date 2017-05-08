@@ -1,200 +1,429 @@
-#include "ib2slurm.h"
+//
+// ib2slurm
+// v0.2
+//
+// Enumerate the nodes present on an InfiniBand network and
+// generate a SLURM topology configuration based on the
+// relationships between those nodes.
+//
 
-/**
- * An iterator for handling each switch in the fabric.
- *
- * @param node the current switch being analyzed.
- * @param user_data various user-controlable options.
- */
-void switch_iter_func(ibnd_node_t* node, void* user_data)
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <ctype.h>
+#include <errno.h>
+#include <getopt.h>
+
+#include <complib/cl_nodenamemap.h>
+#include <infiniband/ibnetdisc.h>
+
+//
+
+nn_map_t          *node_name_map = NULL;
+bool              lookup_names = false;
+bool              is_verbose = false;
+bool              should_do_linkspeed = false;
+FILE              *output_file = NULL;
+
+//
+
+static struct option ib2slurm_options[] = {
+    {"help",                no_argument,        NULL,                 'h' },
+    {"node-name-map",       required_argument,  NULL,                 'm' },
+    {"load-cache",          required_argument,  NULL,                 'l' },
+    {"Ca",                  required_argument,  NULL,                 'C' },
+    {"Port",                required_argument,  NULL,                 'P' },
+    {"output",              required_argument,  NULL,                 'o' },
+    {"lookup-names",        no_argument,        NULL,                 's' },
+    {"progress",            no_argument,        NULL,                 'p' },
+    {"verbose",             no_argument,        NULL,                 'v' },
+    {"linkspeed",           no_argument,        NULL,                 'L' },
+    {NULL,                  0,                  NULL,                  0  }
+};
+
+//
+
+void
+usage(
+    const char      *argv0
+)
 {
-    ib2slurm_opts_t* opts = (ib2slurm_opts_t*)user_data;
-
-    /*
-     * We don't really need to lookup the switch name, slurm will be happy
-     * with using the guid of the switch.
-     */
-    if(opts->lookup_flag) {
-        char* switchname = node_name(node, opts);
-        fprintf(stdout, "SwitchName=%s", switchname);
-        free(switchname);
-    } else {
-        fprintf(stdout, "SwitchName=%" PRIx64, node->guid);
-    }
-
-    /*
-     * After printing out the name of the switch, lets print out all of the nodes and
-     * switches in the level of the tree directly below the current switch.
-     */
-    output_nodelist("Switches=", IB_NODE_SWITCH, opts, node);
-    output_nodelist("Nodes=", IB_NODE_CA, opts, node);
-
-    fprintf(stdout, "\n");
+    printf(
+        "usage:\n"
+        "\n"
+        "  %s {options}\n"
+        "\n"
+        "  [Fabric discovery]\n"
+        "\n"
+        "    -C, --Ca <ca_name>           use the named CA\n"
+        "    -P, --Port <ca_port>         use the given port number on the CA\n"
+        "    -p, --progress               display progress information while fabric\n"
+        "                                 is discovered\n"
+        "\n"
+        "  [Cached fabric]\n"
+        "\n"
+        "    -l, --load-cache <path>      read a cached fabric definition from\n"
+        "                                 the file at the given path\n"
+        "\n"
+        "  -o, --output <path>            write output topology configuration\n"
+        "                                 to the file at the given path\n"
+        "  -m, --node-name-map <path>     read CA-to-node-name map from the\n"
+        "                                 file at the given path\n"
+        "  -s, --lookup-names             map node GUIDs to names in the output\n"
+        "  -L, --linkspeed                include LinkSpeed values for switches\n"
+        "  -v, --verbose                  display additional information to stderr\n"
+        "\n",
+        argv0
+      );
 }
 
-void output_nodelist(char *tag, int type, ib2slurm_opts_t* opts, ibnd_node_t* node)
-{
-    ibnd_port_t* port;
-    int p = 0;
+//
 
-    ib2slurm_list_t list_head;
-    list_head.str = NULL;
-    list_head.next = NULL;
-
-    ib2slurm_list_t* list_cur = &list_head;
-
-    /*
-     * Lets go through all the ports on this switch to see if anything is
-     * connected to it.
-     */
-    for(p = 1; p <= node->numports; p++) {
-        port = node->ports[p];
-
-        /*
-         * Only print out the node types that match the tag printed
-         * before it.
-         */
-        if(port && port->remoteport && port->remoteport->node->type == type) {
-
-            /* Always attempt a node lookup, since slurm requires it. */
-            if(opts->lookup_flag || type == IB_NODE_CA) {
-                char* remote = node_name(port->remoteport->node, opts);
-
-                list_cur->str = remote;
-                list_cur->next = (ib2slurm_list_t*)malloc(sizeof(ib2slurm_list_t));
-
-                list_cur = list_cur->next;
-                list_cur->str = NULL;
-                list_cur->next = NULL;
-            } else {
-                char* buf = (char*)malloc(sizeof(char) * 512);
-                sprintf(buf, "%" PRIx64, port->remoteport->guid);
-
-                list_cur->str = buf;
-                list_cur->next = (ib2slurm_list_t*)malloc(sizeof(ib2slurm_list_t));
-
-                list_cur = list_cur->next;
-                list_cur->str = NULL;
-                list_cur->next = NULL;
-            }
-        }
-    }
-
-    if(opts->compress_flag) {
-        print_with_compression(&list_head, tag);
-    } else {
-        print_without_compression(&list_head, tag);
-    }
-
-    /* TODO: free the list elements. */
-}
-
-/*
- * This attempts to print the list in a compressed format,
- * such as common[min-max].
- */
-void print_with_compression(ib2slurm_list_t* list, char* tag)
-{
-    fprintf(stderr, "Sorry, compressing strings isn't implemented yet.\n");
-    exit(EXIT_FAILURE);
-}
-
-/*
- * This prints the list to be formatted as seperated by commas.
- */
-void print_without_compression(ib2slurm_list_t* list, char* tag)
-{
-    ib2slurm_list_t* list_cur = NULL;
-
-    if(list != NULL && list->str != NULL) {
-        fprintf(stdout, " %s", tag);
-
-        for(list_cur = list; list_cur->next != NULL; list_cur = list_cur->next) {
-            fprintf(stdout, "%s", list_cur->str);
-
-            if(list_cur->next->str != NULL) {
-                fprintf(stdout, ", ");
-            }
-        }
-    }
-}
-
-/*
- * A helper to lookup the node name based on the node name map specified by
- * the user.
- *
- * @param the node name to print out.
- * @param opts user specified options.
- */
-char* node_name(ibnd_node_t* node, ib2slurm_opts_t* opts)
-{
-    char* buf = NULL;
-
-    if(node == NULL) {
-        fprintf(stderr, "Attempted to get a node name from an invalid node.");
-        exit(EXIT_FAILURE);
-    }
-
-    buf = remap_node_name(opts->node_name_map, node->guid, node->nodedesc);
-
-    return buf;
-}
-
-/*
- * Output a short header to tell someone viewing the topology.conf where it
- * came from.
- */
 void output_header()
 {
-    fprintf(stdout, "# topology.conf\n"
-            "# Switch Configuration\n#\n"
-            "# Generated by ib2slurm <http://github.com/hpc/ib2slurm>\n#\n");
+    fprintf(stdout,
+        "# topology.conf\n"
+        "# Switch Configuration\n"
+        "#\n"
+        "# Generated by ib2slurm <http://github.com/jtfre/ib2slurm>\n"
+        "#\n"
+      );
 }
 
-/*
- * Our main entry point.
- */
-int main(int argc, char** argv)
+//
+
+char*
+ib_node_desc_extract_name(
+    const char              *desc
+)
 {
-    ibnd_fabric_t* fabric = NULL;
-    char* ibd_ca = NULL;
-    int ibd_ca_port = 0;
+    char                    *end;
+    
+    while ( *desc && isspace(*desc) ) desc++;
+    end = (char*)desc;
+    while ( *end && ! isspace(*end) ) end++;
+    if ( end > desc ) {
+      char                  *p = malloc((end - desc) + 1);
+      
+      if ( p ) {
+        memcpy(p, desc, (end - desc));
+        p[end - desc] = '\0';
+        return p;
+      }
+    }
+    return NULL;
+}
 
-    char* node_name_map_file = NULL;
+//
 
-    static ib2slurm_opts_t opts;
-    int option_index = 0;
-    int c;
-
-    static struct option long_options[] = {
-        {"node-name-map", required_argument, 0, 'm'},
-        {"lookup-switch-name",  no_argument, &opts.lookup_flag,   's'},
-        {"compress-node-names", no_argument, &opts.compress_flag, 'c'},
-        {0, 0, 0, 0}
-    };
-
-    while((c = getopt_long(argc, argv, "m:", long_options, &option_index)) != -1) {
-        switch(c) {
-            case 'm':
-                node_name_map_file = strdup(optarg);
-                break;
+void
+ib_node_iterator(
+    ibnd_node_t             *node,
+    const char              *label,
+    int                     filter_type
+)
+{
+    bool                    is_label_printed = false;
+    int                     p_idx = 0;
+    
+    //
+    // Iterate over the ports associated with this node:
+    //
+    while ( p_idx++ < node->numports ) {
+        ibnd_port_t         *the_port = node->ports[p_idx];
+        
+        //
+        // Determine if the port is defined and of the correct type:
+        //
+        if ( the_port && the_port->remoteport && (the_port->remoteport->node->type == filter_type) ) {
+            bool            did_it = false;
+            
+            //
+            // If we have a node name map, go ahead and use that to resolve the
+            // name:
+            //
+            if ( lookup_names ) {
+                char        *node_name = remap_node_name(node_name_map, the_port->remoteport->node->guid, the_port->remoteport->node->nodedesc);
+            
+                if ( node_name ) {
+                    if ( ! is_label_printed ) {
+                        fprintf(output_file, " %s=%s", label, node_name);
+                        is_label_printed = true;
+                    } else {
+                        fprintf(output_file, ", %s", node_name);
+                    }
+                    free(node_name);
+                    did_it = true;
+                } else {
+                    fprintf(stderr, "WARNING:  unable to map node GUID to name:  %" PRIx64 "\n", the_port->remoteport->node->guid);
+                }
+            }
+            
+            //
+            // If we're displaying an IB_NODE_CA we _need_ a name.  We'll have to try
+            // to manufacture it from the node description:
+            //
+            if ( ! did_it && (filter_type == IB_NODE_CA) ) {
+                char        *node_name = ib_node_desc_extract_name(the_port->remoteport->node->nodedesc);
+                
+                if ( node_name ) {
+                    if ( ! is_label_printed ) {
+                        fprintf(output_file, " %s=%s", label, node_name);
+                        is_label_printed = true;
+                    } else {
+                        fprintf(output_file, ", %s", node_name);
+                    }
+                    free(node_name);
+                    did_it = true;
+                } else {
+                    fprintf(stderr, "ERROR:  unable to infer a node name from port description:  %" PRIx64 " / %s\n", the_port->remoteport->node->guid, the_port->remoteport->node->nodedesc);
+                    exit(EINVAL);
+                }
+            }
+            
+            //
+            // If we get to this point and haven't displayed anything, we're
+            // doing IB_NODE_SWITCH node display and can just do the GUID:
+            //
+            if ( ! did_it ) {
+                if ( ! is_label_printed ) {
+                    fprintf(output_file, " %s=%" PRIx64, label, the_port->remoteport->node->guid);
+                    is_label_printed = true;
+                } else {
+                    fprintf(output_file, ", %" PRIx64, the_port->remoteport->node->guid);
+                }
+            }
         }
     }
-
-    opts.node_name_map = open_node_name_map(node_name_map_file);
-
-    if((fabric = ibnd_discover_fabric(ibd_ca, ibd_ca_port, NULL, 0)) == NULL) {
-        fprintf(stderr, "IB discover failed.\n");
-        exit(EXIT_FAILURE);
-    }
-
-    output_header();
-    ibnd_iter_nodes_type(fabric, switch_iter_func, IB_NODE_SWITCH, &opts);
-
-    ibnd_destroy_fabric(fabric);
-    close_node_name_map(opts.node_name_map);
-
-    exit(EXIT_SUCCESS);
 }
 
-/* EOF */
+//
+
+void
+ib_switch_iterator(
+    ibnd_node_t *         node,
+    void                  *user_data
+)
+{
+    if ( node ) {
+        //
+        // Define the switch in the topology config:
+        //
+        bool              did_it = false;
+        
+        fprintf(
+            output_file,
+            "#\n"
+            "# Switch GUID %" PRIx64 "\n"
+            "# %s (%d ports)\n"
+            "#\n",
+            node->guid,
+            node->nodedesc,
+            node->numports
+          );
+        if ( lookup_names ) {
+            char          *switch_name = remap_node_name(node_name_map, node->guid, node->nodedesc);
+            
+            if ( switch_name ) {
+                fprintf(output_file, "SwitchName=%s", switch_name);
+                free(switch_name);
+                did_it = true;
+            } else {
+                fprintf(stderr, "WARNING:  unable to map node GUID to name:  %" PRIx64 "\n", node->guid);
+            }
+        }
+        if ( ! did_it ) fprintf(output_file, "SwitchName=%" PRIx64, node->guid);
+
+        /*
+         * After printing out the name of the switch, lets print out all of the nodes and
+         * switches in the level of the tree directly below the current switch.
+         */
+        ib_node_iterator(node, "Switches", IB_NODE_SWITCH);
+        ib_node_iterator(node, "Nodes", IB_NODE_CA);
+        
+        //
+        // The product of link width and speed for the switch should provide its relative
+        // LinkSpeed:
+        //
+        if ( should_do_linkspeed ) {
+          int       link_width = 1, link_speed = 1;
+          
+          mad_decode_field(node->info, IB_PORT_LINK_WIDTH_ACTIVE_F, &link_width);
+          mad_decode_field(node->info, IB_PORT_LINK_SPEED_ACTIVE_F, &link_speed);
+          
+          fprintf(output_file, " LinkSpeed=%d", link_width * link_speed);
+        }
+
+        fprintf(output_file, "\n\n");
+    }
+}
+
+//
+
+int
+main(
+    int                   argc,
+    char**                argv
+)
+{
+    ibnd_fabric_t*        fabric = NULL;
+    struct ibnd_config    ibconfig;
+
+    char*                 ibd_ca = NULL;
+    int                   ibd_ca_port = 0;
+    
+    int                   optc;
+    
+    //
+    // The ibnd configuration structure is necessary and must be initialized
+    // before calling the fabric discovery.  Otherwise on some OFEDs you'll
+    // get segfaults.
+    // 
+    memset(&ibconfig, 0, sizeof(ibconfig));
+
+    while( (optc = getopt_long(argc, argv, "hm:l:C:P:o:spvL", ib2slurm_options, NULL)) != -1 ) {
+        switch(optc) {
+        
+            case 'h': {
+                usage(argv[0]);
+                exit(0);
+            }
+            
+            case 'm': {
+                if ( optarg && *optarg ) {
+                    if ( (node_name_map = open_node_name_map(optarg)) == NULL ) {
+                        fprintf(stderr, "ERROR:  the node name map file '%s' could not be parsed\n", optarg);
+                        exit(EINVAL);
+                    }
+                } else {
+                    fprintf(stderr, "ERROR:  a filename must be provided with the --node-name-map/-m option\n");
+                    exit(EINVAL);
+                }
+                break;
+            }
+            
+            case 'l': {
+                if ( optarg && *optarg) {
+                    if ( (fabric = ibnd_load_fabric(optarg, 0)) == NULL ) {
+                        fprintf(stderr, "ERROR:  unable to load fabric data cached in %s\n", optarg);
+                        exit(EINVAL);
+                    }
+                } else {
+                    fprintf(stderr, "ERROR:  a CA name must be provided with the --Ca/-C option\n");
+                    exit(EINVAL);
+                }
+                break;
+            }
+            
+            case 'C': {
+                if ( optarg && *optarg ) {
+                    ibd_ca = strdup(optarg);
+                } else {
+                    fprintf(stderr, "ERROR:  a CA name must be provided with the --Ca/-C option\n");
+                    exit(EINVAL);
+                }
+                break;
+            }
+            
+            case 'P': {
+                char*     endptr;
+                long      parsed_int = strtol(optarg, &endptr, 10);
+                
+                if ( optarg && *optarg && endptr && (endptr > optarg) ) {
+                    ibd_ca_port = parsed_int;
+                } else {
+                    fprintf(stderr, "ERROR:  a valid CA port number must be provided with the --Port/-P option\n");
+                    exit(EINVAL);
+                }
+                break;
+            }
+            
+            case 'o': {
+                if ( optarg && *optarg ) {
+                    if ( strcmp(optarg, "-") == 0 ) {
+                        output_file = stdout;
+                    } else if ( (output_file = fopen(optarg, "w")) == NULL ) {
+                        fprintf(stderr, "ERROR:  unable to open output file for write (errno = %d)\n", errno);
+                        exit(errno);
+                    }
+                } else {
+                    fprintf(stderr, "ERROR:  a filename must be provided with the --output/-o option\n");
+                    exit(EINVAL);
+                }
+                break;
+            }
+            
+            case 's': {
+                lookup_names = true;
+                break;
+            }
+            
+            case 'p':
+                ibconfig.show_progress = 1;
+                break;
+            
+            case 'v':
+                ibconfig.debug = 1;
+                is_verbose = true;
+                break;
+              
+            case 'L':
+                should_do_linkspeed = true;
+                break;
+                
+            default:
+                usage(argv[0]);
+                exit(EINVAL);
+            
+        }
+    }
+    
+    if ( output_file == NULL ) output_file = stdout;
+    
+    //
+    // If we got no name map, don't bother using that feature:
+    //
+    if ( ! node_name_map ) lookup_names = false;
+    
+    //
+    // Discover the IB fabric if a cached copy wasn't loaded:
+    //
+    if ( ! fabric ) {
+        if ( is_verbose ) {
+            fprintf(
+                stderr,
+                "INFO:  discovering InfiniBand fabric on Ca %s, port %d\n",
+                ( ibd_ca ? ibd_ca : "<default>" ),
+                ibd_ca_port
+              );
+        }
+        if ( (fabric = ibnd_discover_fabric(ibd_ca, ibd_ca_port, NULL, &ibconfig)) == NULL ) {
+            fprintf(stderr, "ERROR:  IB fabric discovery failed\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    
+    //
+    // Display the header for the topology config file:
+    //
+    output_header();
+    
+    //
+    // Iterate through the switches found in the fabric:
+    //
+    ibnd_iter_nodes_type(fabric, ib_switch_iterator, IB_NODE_SWITCH, NULL);
+    
+    //
+    // Dispose of the fabric and name mapper:
+    //
+    ibnd_destroy_fabric(fabric);
+    if ( node_name_map ) close_node_name_map(node_name_map);
+    
+    //
+    // Close the output file:
+    //
+    if ( output_file != stdout ) fclose(output_file);
+
+    return 0;
+}
