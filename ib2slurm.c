@@ -7,6 +7,8 @@
 // relationships between those nodes.
 //
 
+#include "ib2slurm-config.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -16,7 +18,11 @@
 #include <getopt.h>
 
 #include <complib/cl_nodenamemap.h>
-#include <infiniband/ibnetdisc.h>
+#include <ibnetdisc.h>
+
+#ifdef USE_SLURM_HOSTLISTS
+#include <slurm/slurm.h>
+#endif
 
 //
 
@@ -25,6 +31,10 @@ bool              lookup_names = false;
 bool              is_verbose = false;
 bool              should_do_linkspeed = false;
 FILE              *output_file = NULL;
+
+#ifdef USE_SLURM_HOSTLISTS
+bool              should_do_ranged_lists = true;
+#endif
 
 //
 
@@ -39,6 +49,9 @@ static struct option ib2slurm_options[] = {
     {"progress",            no_argument,        NULL,                 'p' },
     {"verbose",             no_argument,        NULL,                 'v' },
     {"linkspeed",           no_argument,        NULL,                 'L' },
+#ifdef USE_SLURM_HOSTLISTS
+    {"deranged-lists",      no_argument,        NULL,                 'R' },
+#endif
     {NULL,                  0,                  NULL,                  0  }
 };
 
@@ -71,10 +84,16 @@ usage(
         "  -m, --node-name-map <path>     read CA-to-node-name map from the\n"
         "                                 file at the given path\n"
         "  -s, --lookup-names             map node GUIDs to names in the output\n"
+#ifdef USE_SLURM_HOSTLISTS
+        "  -R, --deranged-lists           do not produce ranged name lists a'la SLURM\n"
+#endif
         "  -L, --linkspeed                include LinkSpeed values for switches\n"
         "  -v, --verbose                  display additional information to stderr\n"
+        "\n"
+        "  [version %d.%d]\n"
         "\n",
-        argv0
+        argv0,
+        ib2slurm_VERSION_MAJOR, ib2slurm_VERSION_MINOR
       );
 }
 
@@ -124,9 +143,22 @@ ib_node_iterator(
     int                     filter_type
 )
 {
+#ifdef USE_SLURM_HOSTLISTS
+    hostlist_t              node_list = NULL;
+#endif
     bool                    is_label_printed = false;
     int                     p_idx = 0;
     
+#ifdef USE_SLURM_HOSTLISTS
+    if ( should_do_ranged_lists ) {
+        node_list = slurm_hostlist_create("");
+        if ( node_list == NULL ) {
+            fprintf(stderr, "ERROR:  unable to initialize SLURM hostlist\n");
+            exit(ENOMEM);
+        }
+    }
+#endif
+
     //
     // Iterate over the ports associated with this node:
     //
@@ -147,6 +179,11 @@ ib_node_iterator(
                 char        *node_name = remap_node_name(node_name_map, the_port->remoteport->node->guid, the_port->remoteport->node->nodedesc);
             
                 if ( node_name ) {
+#ifdef USE_SLURM_HOSTLISTS
+                    if ( node_list ) {
+                        slurm_hostlist_push(node_list, node_name);
+                    } else
+#endif
                     if ( ! is_label_printed ) {
                         fprintf(output_file, " %s=%s", label, node_name);
                         is_label_printed = true;
@@ -168,6 +205,11 @@ ib_node_iterator(
                 char        *node_name = ib_node_desc_extract_name(the_port->remoteport->node->nodedesc);
                 
                 if ( node_name ) {
+#ifdef USE_SLURM_HOSTLISTS
+                    if ( node_list ) {
+                        slurm_hostlist_push(node_list, node_name);
+                    } else
+#endif
                     if ( ! is_label_printed ) {
                         fprintf(output_file, " %s=%s", label, node_name);
                         is_label_printed = true;
@@ -187,6 +229,14 @@ ib_node_iterator(
             // doing IB_NODE_SWITCH node display and can just do the GUID:
             //
             if ( ! did_it ) {
+#ifdef USE_SLURM_HOSTLISTS
+                if ( node_list ) {
+                    char        node_name[24];
+                    
+                    snprintf(node_name, sizeof(node_name), "%" PRIx64, the_port->remoteport->node->guid);
+                    slurm_hostlist_push(node_list, node_name);
+                } else
+#endif
                 if ( ! is_label_printed ) {
                     fprintf(output_file, " %s=%" PRIx64, label, the_port->remoteport->node->guid);
                     is_label_printed = true;
@@ -196,6 +246,22 @@ ib_node_iterator(
             }
         }
     }
+#ifdef USE_SLURM_HOSTLISTS
+    if ( slurm_hostlist_count(node_list) > 0 ) {
+        char        *node_list_str;
+        
+        slurm_hostlist_uniq(node_list);
+        node_list_str = slurm_hostlist_ranged_string_malloc(node_list);
+        if ( node_list_str ) {
+            fprintf(output_file, "%s=%s", label, node_list_str);
+            free((void*)node_list_str);
+        } else {
+            fprintf(stderr, "ERROR:  failed while generating SLURM-style ranged node list\n");
+            exit(ENOMEM);
+        }
+    }
+    slurm_hostlist_destroy(node_list);
+#endif
 }
 
 //
@@ -285,7 +351,7 @@ main(
     // 
     memset(&ibconfig, 0, sizeof(ibconfig));
 
-    while( (optc = getopt_long(argc, argv, "hm:l:C:P:o:spvL", ib2slurm_options, NULL)) != -1 ) {
+    while( (optc = getopt_long(argc, argv, "hm:l:C:P:o:spvLR", ib2slurm_options, NULL)) != -1 ) {
         switch(optc) {
         
             case 'h': {
@@ -373,6 +439,12 @@ main(
               
             case 'L':
                 should_do_linkspeed = true;
+                break;
+            
+            case 'R':
+#ifdef USE_SLURM_HOSTLISTS
+                should_do_ranged_lists = false;
+#endif
                 break;
                 
             default:

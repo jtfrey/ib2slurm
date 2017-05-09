@@ -1,0 +1,8 @@
+/*
+ * Generated configuration file for ib2slurm
+ */
+
+#define ib2slurm_VERSION_MAJOR @ib2slurm_VERSION_MAJOR@
+#define ib2slurm_VERSION_MINOR @ib2slurm_VERSION_MINOR@
+#cmakedefine USE_SLURM_HOSTLISTS
+

@@ -6,6 +6,41 @@ infiniband network discovery services.
 
 This version is based on the original version that can be found at [bringhurst/ib2slurm on github](https://github.com/bringhurst/ib2slurm).
 
+Building
+--------
+
+This version includes both a standard Unix Makefile as well as a CMakeLists.txt file for building the program using CMake.
+
+Variables that control the CMake build include:
+
+| Variable            | Type | Description                                                   |
+| ------------------- | ---- | ------------------------------------------------------------- |
+| ```OFED_PREFIX```         | Path | Path at which OFED has been installed; defaults to ```/usr``` |
+| ```USE_SLURM_HOSTLISTS``` | Bool | When enabled, use the hostlist functionality in libslurm to   |
+|                     |      | write in compact form; defaults to false                      |
+| ```SLURM_PREFIX```        | Path | Path at which SLURM has been installed; no default            |
+
+An example invocation might be:
+
+```
+$ mkdir build
+$ cd build
+$ cmake -DOFED_PREFIX=/usr \
+>   -DUSE_SLURM_HOSTLISTS:BOOL=true \
+>   -DSLURM_PREFIX=/home/1001/slurm/17.02.2 \
+>   ..
+-- The C compiler identification is GNU 4.4.7
+-- Check for working C compiler: /usr/lib64/ccache/cc
+-- Check for working C compiler: /usr/lib64/ccache/cc -- works
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /home/1001/ib2slurm/build
+$ make
+   :
+```
+
 Usage
 -----
 
@@ -29,8 +64,11 @@ Usage
   -m, --node-name-map <path>     read CA-to-node-name map from the
                                  file at the given path
   -s, --lookup-names             map node GUIDs to names in the output
+  -R, --deranged-lists           do not produce ranged name lists a'la SLURM
   -L, --linkspeed                include LinkSpeed values for switches
   -v, --verbose                  display additional information to stderr
+
+  [version 0.2]
 
 ```
 
