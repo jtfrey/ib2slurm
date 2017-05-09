@@ -13,12 +13,11 @@ This version includes both a standard Unix Makefile as well as a CMakeLists.txt 
 
 Variables that control the CMake build include:
 
-| Variable            | Type | Description                                                   |
-| ------------------- | ---- | ------------------------------------------------------------- |
-| ```OFED_PREFIX```         | Path | Path at which OFED has been installed; defaults to ```/usr``` |
-| ```USE_SLURM_HOSTLISTS``` | Bool | When enabled, use the hostlist functionality in libslurm to   |
-|                     |      | write in compact form; defaults to false                      |
-| ```SLURM_PREFIX```        | Path | Path at which SLURM has been installed; no default            |
+| Variable            | Type | Description                                                                                               |
+| ------------------- | ---- | --------------------------------------------------------------------------------------------------------- |
+| ```OFED_PREFIX```         | Path | Path at which OFED has been installed; defaults to ```/usr```                                       |
+| ```USE_SLURM_HOSTLISTS``` | Bool | When enabled, use the hostlist functionality in libslurm to write in compact form; defaults to false|
+| ```SLURM_PREFIX```        | Path | Path at which SLURM has been installed; no default                                                  |
 
 An example invocation might be:
 
