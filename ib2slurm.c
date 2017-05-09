@@ -181,7 +181,9 @@ ib_node_iterator(
                 if ( node_name ) {
 #ifdef USE_SLURM_HOSTLISTS
                     if ( node_list ) {
-                        slurm_hostlist_push(node_list, node_name);
+                        if ( slurm_hostlist_push(node_list, node_name) != 1 ) {
+                            fprintf(stderr, "WARNING:  unable to add `%s` to SLURM hostlist\n", node_name);
+                        }
                     } else
 #endif
                     if ( ! is_label_printed ) {
@@ -207,7 +209,9 @@ ib_node_iterator(
                 if ( node_name ) {
 #ifdef USE_SLURM_HOSTLISTS
                     if ( node_list ) {
-                        slurm_hostlist_push(node_list, node_name);
+                        if ( slurm_hostlist_push(node_list, node_name) != 1 ) {
+                            fprintf(stderr, "WARNING:  unable to add `%s` to SLURM hostlist\n", node_name);
+                        }
                     } else
 #endif
                     if ( ! is_label_printed ) {
@@ -234,7 +238,9 @@ ib_node_iterator(
                     char        node_name[24];
                     
                     snprintf(node_name, sizeof(node_name), "%" PRIx64, the_port->remoteport->node->guid);
-                    slurm_hostlist_push(node_list, node_name);
+                    if ( slurm_hostlist_push(node_list, node_name) != 1 ) {
+                        fprintf(stderr, "WARNING:  unable to add `%s` to SLURM hostlist\n", node_name);
+                    }
                 } else
 #endif
                 if ( ! is_label_printed ) {
