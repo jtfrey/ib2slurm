@@ -253,7 +253,7 @@ ib_node_iterator(
         slurm_hostlist_uniq(node_list);
         node_list_str = slurm_hostlist_ranged_string_malloc(node_list);
         if ( node_list_str ) {
-            fprintf(output_file, "%s=%s", label, node_list_str);
+            fprintf(output_file, " %s=%s", label, node_list_str);
             free((void*)node_list_str);
         } else {
             fprintf(stderr, "ERROR:  failed while generating SLURM-style ranged node list\n");
